@@ -110,19 +110,18 @@ npx tsx src/index.ts generate "React with Firebase and Tailwind"
 - [x] Auto-Architect v1.0 CLI(parser + engine)。
 - [x] 建好遠端 repo `shark0120/auto-architect`(Public),分支 `main`。
 - [x] 可並行、抗紀錄遺失的上傳流程(`scripts/` + `.deploy/remote` + 本文件)。
+- [x] 詳細迭代工作流程與路線圖 → **[`AI_WORKFLOW.md`](AI_WORKFLOW.md)**。
 
-**待辦 / 下一步**
+**待辦**
 - [ ] 第一次 push 上去(人做:首推會跳瀏覽器登入 `shark0120`)。
-- [ ] README 提到但尚未建立:`LICENSE`(MIT)、`CONTRIBUTING.md`。
-- [ ] `package.json` 的 `test` 目前是失敗佔位,補上真的測試。
-- [ ] Roadmap:接 Anthropic Claude API 取代本地啟發式解析。
+- [ ] 其餘全部開發任務:見 **[`AI_WORKFLOW.md`](AI_WORKFLOW.md) §5 路線圖**(本檔不再重複維護任務清單)。
 
 ---
 
 ## 8. 未來 AI 的第一步 (Start here)
 
-1. 讀本檔 + `README.md`。
+1. 讀本檔(怎麼上傳)+ **[`AI_WORKFLOW.md`](AI_WORKFLOW.md)**(做什麼、怎麼驗證、怎麼迭代、有哪些 Skill)。
 2. `git remote -v` / `git status` / `git log --oneline -5` 看現況。
-3. 做你的變更。
+3. 照 `AI_WORKFLOW.md` §2 的循環認領任務、實作、過閘門。
 4. 上傳:`scripts/upload.ps1`(多 AI 一起跑就加 `-PerAgentBranch`)。
-5. 更新本檔第 7 節的「已完成 / 待辦」,讓下一個 AI 接得下去。
+5. 更新 `AI_WORKFLOW.md` §5 打勾與 §6 看板,讓下一個 AI 接得下去。
