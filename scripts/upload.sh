@@ -1,61 +1,113 @@
 #!/usr/bin/env bash
-# upload.sh — 安全的一鍵上傳腳本 (macOS / Linux / Git-Bash)
-# 用法:
-#   REPO_URL="https://github.com/<帳號>/<repo>.git" ./scripts/upload.sh "說明"
-#   ./scripts/upload.sh "說明"          # origin 已存在時
+# upload.sh v2 - safe / concurrent / record-loss-resilient one-shot upload (macOS / Linux / Git-Bash)
+# ASCII-only on purpose (robust across locales). Full explanation (Chinese) is in AI_HANDOFF.md.
 #
-# Auth 來源(腳本本身不含任何密鑰):
-#   1. 系統 Git Credential Manager
-#   2. 環境變數 GIT_PAT(Personal Access Token,不寫進檔案或 config)
+# Usage:
+#   ./scripts/upload.sh "msg"                        # push main (default)
+#   PER_AGENT=1 ./scripts/upload.sh "msg"            # push own ai/<id> branch (full isolation)
+#   REPO_URL="https://github.com/<acct>/<repo>.git" ./scripts/upload.sh "msg"  # first time / change remote
+#
+# Features: runs from any dir; recovers origin from .deploy/remote if missing;
+#           multi-AI via machine-local lock + fetch->rebase->retry; never force.
+# Auth: system Credential Manager, or env var GIT_PAT (never written to files/config).
 set -euo pipefail
 
-BRANCH="${BRANCH:-main}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
+BRANCH="${UPLOAD_BRANCH:-}"
 MESSAGE="${1:-}"
 REPO_URL="${REPO_URL:-}"
+AGENT_ID="${AGENT_ID:-}"
+PER_AGENT="${PER_AGENT:-0}"
+RETRIES="${RETRIES:-5}"
+LOCK_TIMEOUT="${LOCK_TIMEOUT:-120}"
 
-# 0. 確認在 git 工作區
-git rev-parse --is-inside-work-tree >/dev/null
+fail() { echo "ERROR: $*" >&2; exit 1; }
 
-# 1. commit 身分(只影響這個 repo)
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Not a git work tree."
+
 git config user.name  >/dev/null 2>&1 || git config user.name  "Claude (AI Creator)"
 git config user.email >/dev/null 2>&1 || git config user.email "claude.creator@anthropic.com"
 
-# 2. 分支改名為 main
-current="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$current" != "$BRANCH" ]; then
-  echo "→ 分支 $current 改名為 $BRANCH"
-  git branch -M "$BRANCH"
+# Resolve remote (record-loss resilient)
+if [ -n "$REPO_URL" ]; then
+  if git remote | grep -qx origin; then git remote set-url origin "$REPO_URL"; else git remote add origin "$REPO_URL"; fi
+elif ! git remote | grep -qx origin; then
+  if [ -f .deploy/remote ]; then
+    u="$(tr -d ' \r\n' < .deploy/remote)"
+    if [ -n "$u" ]; then git remote add origin "$u"; echo "-> recovered origin from .deploy/remote: $u"; fi
+  fi
+fi
+git remote | grep -qx origin || fail "No origin and no .deploy/remote. Set REPO_URL."
+
+# Decide branch
+if [ "$PER_AGENT" = "1" ]; then
+  [ -z "$AGENT_ID" ] && AGENT_ID="$(hostname)-$$"
+  BRANCH="ai/$AGENT_ID"
+elif [ -z "$BRANCH" ]; then
+  BRANCH="main"
 fi
 
-# 3. 有變更才 commit
+# Machine-local lock (atomic mkdir); clear if stale (>10 min)
+GITDIR="$(git rev-parse --absolute-git-dir)"
+LOCK="$GITDIR/ai-upload.lock"
+deadline=$(( $(date +%s) + LOCK_TIMEOUT ))
+while ! mkdir "$LOCK" 2>/dev/null; do
+  mtime="$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null || echo '')"
+  if [ -n "$mtime" ] && [ "$(( $(date +%s) - mtime ))" -gt 600 ]; then
+    echo "-> clearing stale lock"; rm -rf "$LOCK"; continue
+  fi
+  [ "$(date +%s)" -gt "$deadline" ] && fail "Timed out waiting for lock (another AI is uploading). Try later."
+  echo "-> another AI is uploading, waiting..."
+  sleep 2
+done
+echo "$(hostname) PID=$$ $(date -Iseconds 2>/dev/null || date)" > "$LOCK/owner" 2>/dev/null || true
+trap 'rm -rf "$LOCK"' EXIT
+
+# Switch to target branch (handles fresh 'git init' unborn branch -> rebuild-from-zero)
+if git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  if [ "$PER_AGENT" = "1" ]; then
+    git checkout -B "$BRANCH" >/dev/null
+  else
+    current="$(git rev-parse --abbrev-ref HEAD)"
+    if [ "$current" != "$BRANCH" ]; then
+      if git show-ref --verify --quiet "refs/heads/$BRANCH"; then git checkout "$BRANCH" >/dev/null; else git branch -M "$BRANCH"; fi
+    fi
+  fi
+else
+  git symbolic-ref HEAD "refs/heads/$BRANCH"   # no commits yet: just set the branch name
+fi
+
+# Commit only if there are changes
 git add -A
 if [ -n "$(git status --porcelain)" ]; then
-  [ -z "$MESSAGE" ] && MESSAGE="chore: update project"
-  git commit -m "$MESSAGE"
-  echo "→ 已 commit: $MESSAGE"
+  [ -z "$MESSAGE" ] && MESSAGE="chore: update by AI ($(date '+%Y-%m-%d %H:%M'))"
+  git commit -m "$MESSAGE" >/dev/null
+  echo "-> committed: $MESSAGE"
 else
-  echo "→ 沒有新變更,略過 commit"
+  echo "-> no changes to commit"
 fi
 
-# 4. 確保 origin 存在
-if ! git remote | grep -qx "origin"; then
-  if [ -z "$REPO_URL" ]; then
-    echo "找不到 origin,也沒有提供 REPO_URL。請先建立空 repo 並帶入網址。" >&2
-    exit 1
+# Push (fetch -> rebase -> retry; never force)
+pushed=0
+for i in $(seq 1 "$RETRIES"); do
+  if [ -n "${GIT_PAT:-}" ]; then
+    basic="$(printf 'x-access-token:%s' "$GIT_PAT" | base64 | tr -d '\n')"
+    if git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin "$BRANCH"; then pushed=1; break; fi
+  else
+    if git push -u origin "$BRANCH"; then pushed=1; break; fi
   fi
-  git remote add origin "$REPO_URL"
-  echo "→ 已設定 origin: $REPO_URL"
-fi
-
-# 5. Push
-if [ -n "${GIT_PAT:-}" ]; then
-  basic="$(printf 'x-access-token:%s' "$GIT_PAT" | base64 | tr -d '\n')"
-  echo "→ 使用 GIT_PAT 推送 $BRANCH ..."
-  git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin "$BRANCH"
-else
-  echo "→ 使用系統憑證推送 $BRANCH(首次可能跳出登入)..."
-  git push -u origin "$BRANCH"
-fi
+  echo "-> push rejected (another AI likely pushed); syncing and retrying $i/$RETRIES ..."
+  git fetch origin "$BRANCH" 2>/dev/null || true
+  if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    if ! git rebase "origin/$BRANCH"; then
+      git rebase --abort 2>/dev/null || true
+      fail "Auto-rebase hit a conflict. Resolve manually: git pull --rebase origin $BRANCH, then rerun."
+    fi
+  fi
+done
+[ "$pushed" = "1" ] || fail "Still could not push after $RETRIES retries (check login / network)."
 
 echo ""
-echo "✅ 上傳完成。用 'git remote -v' 和平台網頁確認。"
+echo "OK: uploaded branch $BRANCH -> origin"

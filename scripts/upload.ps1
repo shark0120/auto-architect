@@ -1,64 +1,148 @@
 <#
-  upload.ps1  —  安全的一鍵上傳腳本 (Windows PowerShell)
-  用法:
-    .\scripts\upload.ps1 -RepoUrl "https://github.com/<帳號>/<repo>.git" -Message "說明"
-    .\scripts\upload.ps1 -Message "說明"      # origin 已存在時
+  upload.ps1  v2  -  safe / concurrent / record-loss-resilient one-shot upload (Windows PowerShell)
+  ASCII-only on purpose: works on any code page (this machine's ANSI CP is Big5), with or without BOM.
+  Full explanation (Chinese) lives in AI_HANDOFF.md.
 
-  Auth 來源(擇一,腳本本身不含任何密鑰):
-    1. 系統 Git Credential Manager(第一次 push 會跳瀏覽器登入)
-    2. 環境變數 $env:GIT_PAT(Personal Access Token,不會被寫進檔案或 config)
+  Usage:
+    .\scripts\upload.ps1 -Message "msg"                    # push main (default)
+    .\scripts\upload.ps1 -PerAgentBranch -Message "msg"    # push own ai/<id> branch (full isolation)
+    .\scripts\upload.ps1 -RepoUrl "https://github.com/<acct>/<repo>.git"  # first time / change remote
+
+  Features:
+    * Runs from any directory (auto-locates project root).
+    * Record-loss resilient: if origin is missing, recovers it from tracked file .deploy/remote.
+    * Multi-AI concurrency: machine-local lock serializes commit+push; on push race does fetch->rebase->retry; never force.
+    * Contains NO secrets. Auth via system Credential Manager, or env var $env:GIT_PAT.
 #>
+[CmdletBinding()]
 param(
   [string]$RepoUrl = $env:REPO_URL,
-  [string]$Branch  = "main",
-  [string]$Message = ""
+  [string]$Branch  = "",
+  [string]$Message = "",
+  [string]$AgentId = $env:AGENT_ID,
+  [switch]$PerAgentBranch,
+  [int]$Retries = 5,
+  [int]$LockTimeoutSec = 120
 )
-$ErrorActionPreference = "Stop"
 
-# 0. 確認在 git 工作區
-git rev-parse --is-inside-work-tree | Out-Null
+function Fail($m) { throw $m }
 
-# 1. 確認 commit 身分(只影響這個 repo)
-if (-not (git config user.name))  { git config user.name  "Claude (AI Creator)" }
-if (-not (git config user.email)) { git config user.email "claude.creator@anthropic.com" }
+# Always operate from the project root (parent of scripts/)
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
 
-# 2. 分支改名為 main(若目前不是)
-$current = (git rev-parse --abbrev-ref HEAD).Trim()
-if ($current -ne $Branch) {
-  Write-Host "→ 分支 $current 改名為 $Branch"
-  git branch -M $Branch
-}
+try {
+  # 0. Must be a git work tree
+  git rev-parse --is-inside-work-tree *> $null
+  if ($LASTEXITCODE -ne 0) { Fail "Not a git work tree." }
 
-# 3. 有變更才 commit
-git add -A
-$pending = git status --porcelain
-if ($pending) {
-  if (-not $Message) { $Message = "chore: update project" }
-  git commit -m $Message
-  Write-Host "→ 已 commit: $Message"
-} else {
-  Write-Host "→ 沒有新變更,略過 commit"
-}
+  # 1. Commit identity (this repo only)
+  if (-not (git config user.name))  { git config user.name  "Claude (AI Creator)" }
+  if (-not (git config user.email)) { git config user.email "claude.creator@anthropic.com" }
 
-# 4. 確保 origin 存在
-$remotes = git remote
-if ($remotes -notcontains "origin") {
-  if (-not $RepoUrl) {
-    throw "找不到 origin,也沒有提供 -RepoUrl / `$env:REPO_URL。請先建立空 repo 並帶入網址。"
+  # 2. Resolve remote (record-loss resilient: recover origin from .deploy/remote)
+  $remotes = git remote
+  if ($RepoUrl) {
+    if ($remotes -contains "origin") { git remote set-url origin $RepoUrl }
+    else { git remote add origin $RepoUrl }
   }
-  git remote add origin $RepoUrl
-  Write-Host "→ 已設定 origin: $RepoUrl"
-}
+  elseif ($remotes -notcontains "origin") {
+    $fallback = Join-Path $RepoRoot ".deploy\remote"
+    if (Test-Path $fallback) {
+      $u = (Get-Content $fallback -Raw).Trim()
+      if ($u) { git remote add origin $u; Write-Host "-> recovered origin from .deploy/remote: $u" }
+    }
+  }
+  if ((git remote) -notcontains "origin") { Fail "No origin and no .deploy/remote to recover from. Pass -RepoUrl." }
 
-# 5. Push
-if ($env:GIT_PAT) {
-  # 用 PAT 走 http header(不寫進 URL / config,push 完即消失)
-  $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$($env:GIT_PAT)"))
-  Write-Host "→ 使用 GIT_PAT 推送 $Branch ..."
-  git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin $Branch
-} else {
-  Write-Host "→ 使用系統憑證推送 $Branch(首次可能跳出登入視窗)..."
-  git push -u origin $Branch
-}
+  # 3. Decide branch
+  if ($PerAgentBranch) {
+    if (-not $AgentId) { $AgentId = "$env:COMPUTERNAME-$PID" }
+    $Branch = "ai/$AgentId"
+  }
+  elseif (-not $Branch) { $Branch = "main" }
 
-Write-Host "`n✅ 上傳完成。用 'git remote -v' 和平台網頁確認。"
+  # 4. Acquire machine-local lock (serialize commit+push across AIs on the same machine)
+  $gitDir  = (git rev-parse --absolute-git-dir).Trim()
+  $lockDir = Join-Path $gitDir "ai-upload.lock"
+  $deadline = (Get-Date).AddSeconds($LockTimeoutSec)
+  $haveLock = $false
+  while (-not $haveLock) {
+    try {
+      New-Item -ItemType Directory -Path $lockDir -ErrorAction Stop | Out-Null
+      Set-Content -Path (Join-Path $lockDir "owner") -Value "$env:COMPUTERNAME PID=$PID $(Get-Date -Format o)"
+      $haveLock = $true
+    }
+    catch {
+      $info = Get-Item $lockDir -ErrorAction SilentlyContinue
+      if ($info -and ((Get-Date) - $info.CreationTime).TotalMinutes -gt 10) {
+        Write-Host "-> clearing stale lock"
+        Remove-Item $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+        continue
+      }
+      if ((Get-Date) -gt $deadline) { Fail "Timed out waiting for lock (another AI is uploading). Try again later." }
+      Write-Host "-> another AI is uploading, waiting..."
+      Start-Sleep -Seconds 2
+    }
+  }
+
+  try {
+    # 5. Switch to target branch (handles fresh 'git init' unborn branch -> rebuild-from-zero)
+    git rev-parse --verify -q HEAD *> $null
+    if ($LASTEXITCODE -ne 0) {
+      git symbolic-ref HEAD "refs/heads/$Branch"   # no commits yet: just set the branch name
+    }
+    elseif ($PerAgentBranch) {
+      git checkout -B $Branch | Out-Null
+    }
+    else {
+      $current = (git rev-parse --abbrev-ref HEAD).Trim()
+      if ($current -ne $Branch) {
+        git show-ref --verify --quiet "refs/heads/$Branch"
+        if ($LASTEXITCODE -eq 0) { git checkout $Branch | Out-Null } else { git branch -M $Branch }
+      }
+    }
+
+    # 6. Commit only if there are changes
+    git add -A
+    if (git status --porcelain) {
+      if (-not $Message) { $Message = "chore: update by AI ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))" }
+      git commit -m $Message | Out-Null
+      Write-Host "-> committed: $Message"
+    }
+    else { Write-Host "-> no changes to commit" }
+
+    # 7. Push (fetch -> rebase -> retry; never force)
+    $pushed = $false
+    for ($i = 1; $i -le $Retries; $i++) {
+      if ($env:GIT_PAT) {
+        $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$($env:GIT_PAT)"))
+        git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin $Branch
+      }
+      else { git push -u origin $Branch }
+      if ($LASTEXITCODE -eq 0) { $pushed = $true; break }
+
+      Write-Host "-> push rejected (another AI likely pushed); syncing and retrying $i/$Retries ..."
+      git fetch origin $Branch 2>$null
+      git show-ref --verify --quiet "refs/remotes/origin/$Branch"
+      if ($LASTEXITCODE -eq 0) {
+        git rebase "origin/$Branch"
+        if ($LASTEXITCODE -ne 0) {
+          git rebase --abort 2>$null
+          Fail "Auto-rebase hit a conflict. Resolve manually: git pull --rebase origin $Branch, then rerun."
+        }
+      }
+    }
+    if (-not $pushed) { Fail "Still could not push after $Retries retries (check login / network)." }
+
+    Write-Host ""
+    Write-Host "OK: uploaded branch $Branch -> origin"
+  }
+  finally {
+    Remove-Item $lockDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+catch {
+  Write-Host "ERROR: $($_.Exception.Message)"
+  exit 1
+}

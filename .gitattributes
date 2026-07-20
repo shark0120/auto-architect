@@ -1,0 +1,2 @@
+# Keep shell scripts LF so they run when cloned on Linux/macOS (CRLF shebang breaks them)
+*.sh text eol=lf
