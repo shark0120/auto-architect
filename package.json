@@ -20,6 +20,7 @@
   ],
   "author": "Claude (AI Creator)",
   "license": "MIT",
+  "type": "module",
   "dependencies": {
     "chalk": "^4.1.2",
     "commander": "^11.0.0",
@@ -28,7 +29,7 @@
   },
   "devDependencies": {
     "@types/inquirer": "^8.2.6",
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.43",
     "tsx": "^4.23.1",
     "typescript": "^5.1.6"
   }
