@@ -39,6 +39,10 @@ try {
   # 1. Commit identity (this repo only)
   if (-not (git config user.name))  { git config user.name  "Claude (AI Creator)" }
   if (-not (git config user.email)) { git config user.email "claude.creator@anthropic.com" }
+  # Per-repo credential namespace: this machine may have OTHER GitHub accounts cached.
+  # useHttpPath makes Credential Manager store/look up creds per repo URL, so this
+  # project's account (shark0120) never collides with the machine's default account.
+  git config credential.useHttpPath true
 
   # 2. Resolve remote (record-loss resilient: recover origin from .deploy/remote)
   $remotes = git remote
@@ -117,10 +121,18 @@ try {
     for ($i = 1; $i -le $Retries; $i++) {
       if ($env:GIT_PAT) {
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$($env:GIT_PAT)"))
-        git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin $Branch
+        $pushOut = (git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin $Branch 2>&1 | Out-String)
       }
-      else { git push -u origin $Branch }
+      else { $pushOut = (git push -u origin $Branch 2>&1 | Out-String) }
+      Write-Host $pushOut
       if ($LASTEXITCODE -eq 0) { $pushed = $true; break }
+
+      # Auth errors are NOT push races - retrying is useless. Fail fast with guidance.
+      if ($pushOut -match '403|Permission .* denied|Authentication failed|could not read Username') {
+        Fail ("Permission/auth error - the cached credential belongs to the wrong account. Fix: run " +
+              "'git credential-manager github logout' OR open Windows Credential Manager and remove the " +
+              "'git:https://github.com' entry for the wrong account, then rerun this script and log in as the project account (shark0120).")
+      }
 
       Write-Host "-> push rejected (another AI likely pushed); syncing and retrying $i/$Retries ..."
       git fetch origin $Branch 2>$null

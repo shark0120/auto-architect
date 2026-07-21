@@ -29,6 +29,8 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "Not a git work tree
 
 git config user.name  >/dev/null 2>&1 || git config user.name  "Claude (AI Creator)"
 git config user.email >/dev/null 2>&1 || git config user.email "claude.creator@anthropic.com"
+# Per-repo credential namespace: avoids collisions with other GitHub accounts cached on this machine.
+git config credential.useHttpPath true
 
 # Resolve remote (record-loss resilient)
 if [ -n "$REPO_URL" ]; then
@@ -94,9 +96,15 @@ pushed=0
 for i in $(seq 1 "$RETRIES"); do
   if [ -n "${GIT_PAT:-}" ]; then
     basic="$(printf 'x-access-token:%s' "$GIT_PAT" | base64 | tr -d '\n')"
-    if git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin "$BRANCH"; then pushed=1; break; fi
+    push_out="$(git -c http.extraheader="AUTHORIZATION: basic $basic" push -u origin "$BRANCH" 2>&1)" && pushed=1
   else
-    if git push -u origin "$BRANCH"; then pushed=1; break; fi
+    push_out="$(git push -u origin "$BRANCH" 2>&1)" && pushed=1
+  fi
+  echo "$push_out"
+  [ "$pushed" = "1" ] && break
+  # Auth errors are NOT push races - retrying is useless. Fail fast with guidance.
+  if echo "$push_out" | grep -qiE '403|Permission .* denied|Authentication failed|could not read Username'; then
+    fail "Permission/auth error - cached credential belongs to the wrong account. Remove the github.com entry from the OS credential store, rerun, and log in as the project account."
   fi
   echo "-> push rejected (another AI likely pushed); syncing and retrying $i/$RETRIES ..."
   git fetch origin "$BRANCH" 2>/dev/null || true
