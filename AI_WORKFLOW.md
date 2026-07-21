@@ -55,7 +55,7 @@
 | 閘門 | 指令 | 通過標準 | 目前狀態 (2026-07-20 實測) |
 |---|---|---|---|
 | **G0 環境** | `npm install` | 無 error | ✅ |
-| **G1 型別** | `npx tsc --noEmit` | 0 errors | ❌ 兩個原因:`test-app/` 漏進掃描;`src/` 有 TS1295(`verbatimModuleSyntax` vs CommonJS)→ **build 也是壞的** |
+| **G1 型別** | `npx tsc --noEmit` | 0 errors | ✅ (2026-07-21 修復:`include:["src"]` 隔離 test-app;`nodenext`+`type:module` 解 TS1295;outDir→dist) |
 | **G2 測試** | `npm test` | 全綠 | ❌ 還是 `exit 1` 佔位,尚無測試框架 |
 | **G3 冒煙** | `npx tsx src/index.ts generate "Next.js app with Supabase, Tailwind and GitHub Actions" --dir <temp>` | exit 0,且產出 `package.json`、`README.md`、`app/page.tsx`、`tailwind.config.js`、`.github/workflows/deploy.yml` | ✅ 5 檔全數產出 |
 | **G4 產物可用**(深) | cd 進產出目錄 → `npm install && npm run build` | build 成功 | ❌ 未達標:engine 對所有框架都寫死 `next dev/build/start`(engine.ts:19),React(Vite)/Vue 產物必壞 |
@@ -84,10 +84,10 @@
 > 規則:由上往下認領;每項先看驗收標準;完成打 `[x]` 並附 commit hash。
 
 ### P0 — 讓閘門變綠(最優先,每項都小)
-- [ ] **P0-1 修 tsconfig**:排除 `test-app/`、解 TS1295(建議 `"module": "nodenext"` + package.json 加 `"type": "module"`,或改回純 CJS,擇一走到底)。
-  驗收:`npx tsc --noEmit` 0 errors(G1 綠)。
-- [ ] **P0-2 修 build**:`npm run build` 產出 dist/,`node dist/index.js generate "react app" --dir <temp>` 能跑。
-  驗收:上述兩指令 exit 0;dist/ 不進 git(已在 .gitignore)。
+- [x] **P0-1 修 tsconfig**:排除 `test-app/`、解 TS1295(建議 `"module": "nodenext"` + package.json 加 `"type": "module"`,或改回純 CJS,擇一走到底)。
+  驗收:`npx tsc --noEmit` 0 errors(G1 綠)。✅ done — `4dab638` 起頭(nodenext+type:module),收尾 commit 補 include/rootDir/outDir 並清掉 src/ 編譯污染。
+- [x] **P0-2 修 build**:`npm run build` 產出 dist/,`node dist/index.js generate "react app" --dir <temp>` 能跑。
+  驗收:上述兩指令 exit 0;dist/ 不進 git(已在 .gitignore)。✅ done — 實測 build exit 0、compiled CLI exit 0、React 產物 3 檔正確。
 - [ ] **P0-3 測試框架**:裝 vitest,`npm test` 跑真測試。第一批:parser 至少 6 個 case(三框架、三 DB、tailwind、stripe、ci、無關鍵字 fallback)。parser 的 setTimeout 改成可注入/可跳過,測試不用等 1.5 秒。
   驗收:`npm test` 全綠(G2 綠),測試時間 < 5 秒。
 - [ ] **P0-4 修 engine 框架 bug**:scripts 按框架產生(Next→next、React(Vite)→vite、Vue→vite),React/Vue 也要有最小入口檔。
@@ -126,13 +126,14 @@
 
 ## 6. 狀態看板 (Status Board) — 每輪要更新
 
-**目前進度**:v1.0 骨架完成;上傳工作流已建好並測過;**首推 (first push) 待使用者登入完成**;路線圖從 P0-1 開始全部未動工。
+**目前進度**:v1.0 骨架完成;上傳工作流已建好並測過;P0-1、P0-2 完成(G1 綠、dist 可用);下一個任務 **P0-3(vitest 測試)**。
 
 **任務認領表**(多 AI 並行時先寫這裡再動工;單 AI 可省):
 
 | 任務 | 認領者 (AgentId) | 認領時間 | 狀態 |
 |---|---|---|---|
-| _(範例)_ P0-1 | ai/alice | 2026-07-20 21:00 | done @abc1234 |
+| P0-1 | session-4dab638 + 收尾 | 2026-07-20 23:24 | done |
+| P0-2 | 收尾 session | 2026-07-21 | done |
 
 **卡點/移交備註**:
 - (無)
