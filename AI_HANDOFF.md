@@ -113,7 +113,7 @@ npx tsx src/index.ts generate "React with Firebase and Tailwind"
 - [x] 詳細迭代工作流程與路線圖 → **[`AI_WORKFLOW.md`](AI_WORKFLOW.md)**。
 
 **待辦**
-- [ ] 第一次 push 上去(人做:首推會跳瀏覽器登入 `shark0120`)。
+- [x] 第一次 push 上去 ✅ 2026-07-21 完成(`shark0120` 憑證已以 per-repo 方式快取,之後 push 全自動免登入)。
 - [ ] 其餘全部開發任務:見 **[`AI_WORKFLOW.md`](AI_WORKFLOW.md) §5 路線圖**(本檔不再重複維護任務清單)。
 
 ---
