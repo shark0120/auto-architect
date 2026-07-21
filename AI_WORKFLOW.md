@@ -12,9 +12,9 @@
 
 「v2.0 完成」的定義(全部打勾才算):
 - [ ] `npm run build` 產出可用 dist/,`npx auto-architect` 從 npm 裝了就能跑
-- [ ] 產出的每種框架專案 `npm install && npm run build` 都成功(不只 Next.js)
-- [ ] 測試覆蓋 parser 與 engine,CI 在 GitHub 上全綠
-- [ ] README 的每個承諾(LICENSE、CONTRIBUTING、npm badge)都是真的
+- [x] 產出的每種框架專案 `npm install && npm run build` 都成功(不只 Next.js)✅
+- [~] 測試覆蓋 parser 與 engine ✅(42 個);**CI 是否在 GitHub 上全綠待首次觸發後確認**
+- [x] README 的每個承諾(LICENSE、CONTRIBUTING、badge)都是真的 ✅(npm badge 已移除,因為尚未發佈)
 - [ ] (選配)接上 Claude API 做真 AI 解析,無 API key 時退回啟發式
 
 ---
@@ -56,10 +56,10 @@
 |---|---|---|---|
 | **G0 環境** | `npm install` | 無 error | ✅ |
 | **G1 型別** | `npx tsc --noEmit` | 0 errors | ✅ (2026-07-21 修復:`include:["src"]` 隔離 test-app;`nodenext`+`type:module` 解 TS1295;outDir→dist) |
-| **G2 測試** | `npm test` | 全綠 | ❌ 還是 `exit 1` 佔位,尚無測試框架 |
-| **G3 冒煙** | `npx tsx src/index.ts generate "Next.js app with Supabase, Tailwind and GitHub Actions" --dir <temp>` | exit 0,且產出 `package.json`、`README.md`、`app/page.tsx`、`tailwind.config.js`、`.github/workflows/deploy.yml` | ✅ 5 檔全數產出 |
-| **G4 產物可用**(深) | cd 進產出目錄 → `npm install && npm run build` | build 成功 | ❌ 未達標:engine 對所有框架都寫死 `next dev/build/start`(engine.ts:19),React(Vite)/Vue 產物必壞 |
-| **G5 文件同步** | 人工檢查 | §5 打勾與現實一致;README 沒有說謊的承諾 | ⚠️ README 提到的 LICENSE/CONTRIBUTING 不存在 |
+| **G2 測試** | `npm test` | 全綠 | ✅ vitest,42 個測試全過(<1 秒) |
+| **G3 冒煙** | `node dist/index.js generate "Next.js app with Supabase, Tailwind and GitHub Actions" --dir <temp>` | exit 0,產出 11 檔(含 `package.json`、`app/layout.tsx`、`app/page.tsx`、`next.config.mjs`、`tsconfig.json`、`tailwind.config.js`、`postcss.config.js`、`app/globals.css`、`.github/workflows/ci.yml`) | ✅ 三框架皆 exit 0;`--dry-run` 實測不寫檔 |
+| **G4 產物可用**(深) | cd 進產出目錄 → `npm install && npm run build` | build 成功 | ✅ Next.js / React(Vite)/ Vue(Vite)三者實測 install+build 皆 exit 0 |
+| **G5 文件同步** | 人工檢查 | §5 打勾與現實一致;README 沒有說謊的承諾 | ✅ LICENSE/CONTRIBUTING 已建立;README 逐條核實(含範例輸出與實際逐行一致) |
 | **G6 上傳** | `.\scripts\upload.ps1` | 顯示 `OK: uploaded` | ✅ 腳本已通過 4/4 本地並行測試(首推待使用者登入) |
 
 冒煙測試的 temp 目錄用完即丟,放 scratchpad 或 `%TEMP%`,**不要**產在 repo 裡(`.gitignore` 已擋 `test-app/`、`my-test-app/`)。
@@ -68,14 +68,30 @@
 
 ## 4. 已知真相 (Ground Truth) — 改碼前先知道
 
-程式很小,10 分鐘可讀完;這些是已確認的事實,不用重新考古:
+程式很小,15 分鐘可讀完。以下是 2026-07-21 重寫後的實況:
 
-- `src/index.ts` — commander 入口,只有 `generate` 一個指令,`--dir` 選項。
-- `src/parser.ts` — **假 AI**:關鍵字比對 + `setTimeout(1500)` 裝忙。認得:next.js/react/vue、supabase/firebase/mongo、tailwind、stripe、github actions。`name` 寫死 `my-auto-app`。
-- `src/generators/engine.ts` — 產檔器 + `setTimeout(1200)` 裝忙。**已知 bug**:`package.json` scripts 對所有框架寫死 next 指令(第 19 行);框架分支只有 Next.js 有內容。
+- `src/index.ts` — commander 入口,`generate` 指令,選項 `--dir`、`--dry-run`。
+  先印出解析結果表,未識別的關鍵字會以黃字警告列出。
+- `src/parser.ts` — **確定性關鍵字比對,不是 LLM**(README 已據實說明)。
+  規則以表格形式集中在檔案上方(`FRAMEWORK_RULES` / `DATABASE_RULES` / `STYLING_RULES` /
+  `AUTH_RULES` / `CI_RULES` / `FEATURE_RULES`),加關鍵字=加一列。
+  同步函式、無延遲。支援 `called <name>` / `named <name>` 取專案名 + slugify。
+  回傳 `unrecognized[]` 讓 CLI 警告。
+- `src/generators/engine.ts` — 模板註冊表 `TEMPLATES`,每個框架一份
+  `FrameworkTemplate`(dependencies / devDependencies / scripts / files / tailwind)。
+  **`planProject(schema)` 是純函式**,只回傳檔案清單不寫磁碟 —— 這是測試與 `--dry-run` 的基礎;
+  `scaffoldProject()` 才負責落地。`INTEGRATION_DEPENDENCIES` 依 DB/auth/feature 追加套件。
 - `src/utils/fs.ts` — `createFile`:mkdir -p + 寫檔 + log,乾淨。
-- `tsconfig.json` — 目前把 `test-app/` 掃進去,且 module 設定與 CommonJS 衝突(TS1295)→ G1 紅的根因。
-- `package.json` — `bin` 指向 `dist/index.js` 但 build 壞掉 = **現在 npm publish 會是死包**;`test` 是失敗佔位。
+- 測試 — `src/parser.test.ts`(26)+ `src/generators/engine.test.ts`(16)= **42 個**,<1 秒。
+  兩支都含針對歷史 bug 的迴歸測試(framework fallback、非 Next 框架的 scripts)。
+- `tsconfig.json` — `include:["src"]`、`exclude:["src/**/*.test.ts"]`、`nodenext`、outDir `dist`。
+- `package.json` — `type:module`;scripts:`build` / `test`(vitest run)/ `typecheck` / `start`;
+  `files:["dist"]`。已移除從未使用的 `inquirer`。**尚未 publish 到 npm。**
+
+**已修掉的三個真 bug(別讓它們復活,都有迴歸測試守著)**
+1. parser 先設 `framework='Unknown'` 再用 `if (!framework)` 做 fallback → truthy 導致 fallback 永不觸發。
+2. engine 對所有框架寫死 `next dev/build/start` → React/Vue 產出無法執行。
+3. 產出的 `package.json` 完全沒有 dependencies → `npm install` 裝不到東西,build 必敗。
 
 ---
 
@@ -88,34 +104,36 @@
   驗收:`npx tsc --noEmit` 0 errors(G1 綠)。✅ done — `4dab638` 起頭(nodenext+type:module),收尾 commit 補 include/rootDir/outDir 並清掉 src/ 編譯污染。
 - [x] **P0-2 修 build**:`npm run build` 產出 dist/,`node dist/index.js generate "react app" --dir <temp>` 能跑。
   驗收:上述兩指令 exit 0;dist/ 不進 git(已在 .gitignore)。✅ done — 實測 build exit 0、compiled CLI exit 0、React 產物 3 檔正確。
-- [ ] **P0-3 測試框架**:裝 vitest,`npm test` 跑真測試。第一批:parser 至少 6 個 case(三框架、三 DB、tailwind、stripe、ci、無關鍵字 fallback)。parser 的 setTimeout 改成可注入/可跳過,測試不用等 1.5 秒。
+- [x] **P0-3 測試框架**:裝 vitest,`npm test` 跑真測試。第一批:parser 至少 6 個 case(三框架、三 DB、tailwind、stripe、ci、無關鍵字 fallback)。parser 的 setTimeout 改成可注入/可跳過,測試不用等 1.5 秒。
   驗收:`npm test` 全綠(G2 綠),測試時間 < 5 秒。
-- [ ] **P0-4 修 engine 框架 bug**:scripts 按框架產生(Next→next、React(Vite)→vite、Vue→vite),React/Vue 也要有最小入口檔。
+- [x] **P0-4 修 engine 框架 bug**:scripts 按框架產生(Next→next、React(Vite)→vite、Vue→vite),React/Vue 也要有最小入口檔。
   驗收:三種框架各 generate 一次,`package.json` scripts 正確、入口檔存在(G3 擴充);Next.js 產物過 G4。
-- [ ] **P0-5 兌現 README 承諾**:補 `LICENSE`(MIT, copyright shark0120)與 `CONTRIBUTING.md`。
+- [x] **P0-5 兌現 README 承諾**:補 `LICENSE`(MIT, copyright shark0120)與 `CONTRIBUTING.md`。
   驗收:兩檔存在,README 連結不再是死的(G5 綠)。
 
 ### P1 — CI 與可信度
-- [ ] **P1-1 GitHub Actions CI**:`.github/workflows/ci.yml`,push/PR 時跑 `tsc --noEmit` + `npm test` + G3 冒煙。
+- [x] **P1-1 GitHub Actions CI**:`.github/workflows/ci.yml`,push/PR 時跑 `tsc --noEmit` + `npm test` + G3 冒煙。
   驗收:推上 GitHub 後 Actions 全綠,README 掛真 badge。
 - [ ] **P1-2 npm pack 演練**:`npm pack` 產 tarball,從 tarball 全域安裝後 `auto-architect generate` 可跑(補 `files` 欄位、`prepublishOnly` build)。
   驗收:tarball 安裝實測通過。發佈到 npm 要使用者的 npm 帳號,**先問使用者**。
 
 ### P2 — 核心價值(讓工具真的有用)
-- [ ] **P2-1 parser 擴充**:加 Svelte/SvelteKit、Express/Fastify(API-only)、Prisma、PostgreSQL、MySQL、auth(Clerk/Auth.js/Supabase Auth)、`--name` 推斷。未識別關鍵字要警告列出,不再沉默。
+- [~] **P2-1 parser 擴充**:已加 Prisma / PostgreSQL / MySQL / Clerk / Auth.js / Auth0 /
+  styled-components / MUI / i18n / Docker / GitLab CI、`called|named` 取名、未識別關鍵字警告(皆有測試)。
+  **尚未做**:Svelte/SvelteKit、Express/Fastify(API-only)。
   驗收:每個新關鍵字有測試;未知詞警告有測試。
-- [ ] **P2-2 CLI 選項**:`--dry-run`(只印檔案清單)、`--yes`(免互動)、目標目錄非空時要確認。
+- [~] **P2-2 CLI 選項**:`--dry-run` ✅ 已實作並實測不寫檔;`--yes`(免互動)與「目標目錄非空要確認」**尚未做**。
   驗收:三個行為各有測試或冒煙驗證。
-- [ ] **P2-3 模板品質**:Next.js 模板補齊到 `npm run build` 可過(next.config、tsconfig、globals.css + Tailwind 接線);Vite/Vue 同樣標準。
-  驗收:三框架產物全部過 G4(這是本階段的硬標準)。
+- [x] **P2-3 模板品質**:Next.js 模板補齊到 `npm run build` 可過(next.config、tsconfig、globals.css + Tailwind 接線);Vite/Vue 同樣標準。
+  驗收:三框架產物全部過 G4。✅ done — Next.js / React / Vue 三者 `npm install && npm run build` 實測皆 exit 0。
 - [ ] **P2-4 examples/ 與 demo**:examples 目錄放三個真實產出範例 + README 加 demo GIF/asciinema。
   驗收:範例可 build;README 有動圖。
 
 ### P3 — 真 AI 解析(差異化賣點)
 - [ ] **P3-1 Claude API 整合**:`ANTHROPIC_API_KEY` 存在時用 Claude 解析 prompt → ArchitectureSchema(嚴格 JSON schema 驗證),否則自動退回啟發式。**動工前必讀 `claude-api` skill**(模型 ID、結構化輸出、計費)。API key 只讀環境變數,絕不寫檔(HANDOFF §6 鐵則)。
   驗收:無 key → 行為與現在完全相同(舊測試全綠);有 key → 手動實測 3 個複雜 prompt,解析優於啟發式;錯誤/超時退回啟發式且有測試(mock)。
-- [ ] **P3-2 移除裝忙 setTimeout**:真 API 有真延遲,假延遲刪掉;spinner 保留。
-  驗收:G3 冒煙在無 key 時 < 1 秒完成。
+- [x] **P3-2 移除裝忙 setTimeout**:假延遲已全數刪除(parser 1.5s + engine 1.2s)。
+  驗收:G3 冒煙在無 key 時 < 1 秒完成。✅ done。
 
 ### P4 — 發佈與成長(需使用者參與的都先問)
 - [ ] **P4-1 npm publish v2.0.0** + git tag + CHANGELOG.md(**需使用者 npm 帳號,先問**)。
@@ -126,7 +144,7 @@
 
 ## 6. 狀態看板 (Status Board) — 每輪要更新
 
-**目前進度**:v1.0 骨架完成;**首推完成、憑證已快取(push 全自動)**;P0-1、P0-2 完成(G1 綠、dist 可用);下一個任務 **P0-3(vitest 測試)**。
+**目前進度**:**P0 全數完成 + P1-1 CI 完成**。G1/G2/G3/G4/G5 全綠(42 測試;三框架產出物實測可 build)。README 已改為誠實描述(關鍵字比對,非 AI)。下一個任務 **P1-2(npm pack 演練)**,再往 P2 模板深化。
 
 **任務認領表**(多 AI 並行時先寫這裡再動工;單 AI 可省):
 

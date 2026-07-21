@@ -1,43 +1,120 @@
-# 🏗️ Auto-Architect
+# Auto-Architect
 
-> An intelligent, language-agnostic CLI tool that instantly generates production-ready, fully-configured boilerplate (Auth, Database, CI/CD, Tailwind) for *any* tech stack based on a single natural language prompt.
+> Turn a plain-English stack description into a project skeleton that actually installs and builds.
 
-[![NPM Version](https://img.shields.io/npm/v/auto-architect.svg)](https://npmjs.org/package/auto-architect)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-Developers hate boilerplate and configuration. With **Auto-Architect**, you just type what you want in plain English, and the AI handles the rest.
-
-## 🚀 Quick Start
-
-Generate a complete project in under 2 seconds:
+[![CI](https://github.com/shark0120/auto-architect/actions/workflows/ci.yml/badge.svg)](https://github.com/shark0120/auto-architect/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ```bash
-npx auto-architect generate "Next.js app with Supabase, Stripe billing, Tailwind, and GitHub Actions"
+git clone https://github.com/shark0120/auto-architect.git
+cd auto-architect
+npm install
+npm start -- generate "Next.js app with Supabase, Tailwind and GitHub Actions" --dir ./my-app
 ```
 
-### What happens next?
-1. The AI Engine parses your prompt into a standard **Architecture Schema**.
-2. The Scaffold Engine builds out your `package.json`, sets up `Next.js` routing, configures `Tailwind CSS`, and writes your `.github/workflows/deploy.yml`.
-3. You `cd` into your new folder and start coding your business logic. Zero config needed.
+```
+Resolved stack
+  Framework : Next.js
+  Styling   : Tailwind CSS
+  Database  : Supabase (PostgreSQL)
+  Auth      : None
+  CI/CD     : GitHub Actions
+  Features  : None
 
-## ✨ Features
+Building project files:
+CREATE ./my-app/package.json
+CREATE ./my-app/README.md
+CREATE ./my-app/.gitignore
+CREATE ./my-app/next.config.mjs
+CREATE ./my-app/tsconfig.json
+CREATE ./my-app/app/layout.tsx
+CREATE ./my-app/app/page.tsx
+CREATE ./my-app/tailwind.config.js
+CREATE ./my-app/postcss.config.js
+CREATE ./my-app/app/globals.css
+CREATE ./my-app/.github/workflows/ci.yml
+```
 
-- **🧠 Natural Language Prompting:** "React app with Firebase and Material UI". The parser understands your intent.
-- **⚡ Blazing Fast:** Built with TypeScript and Node.js. Generates full directory structures in milliseconds.
-- **🛠️ Batteries Included:** Automatically configures CI/CD, Linters, and database connections based on your stack.
-- **🧩 Extensible Schema:** Add your own custom frameworks or styling templates to the Generator Engine.
+Then `cd my-app && npm install && npm run build` — it builds.
 
-## 💻 Tech Stack
-- **CLI Engine:** Node.js, TypeScript, Commander, Inquirer
-- **AI Parser:** Simulated local heuristic parsing (v1.0) -> *Roadmap: Anthropic Claude API Integration*
-- **Scaffold Generation:** AST-based file writing, modular framework support.
+## Why this exists
 
-## 🤝 Contributing
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
-Check out our [Contributing Guide](CONTRIBUTING.md) to get started!
+Most scaffolding tools make you answer ten prompts or memorise a flag matrix.
+Auto-Architect takes one sentence and writes a complete, **buildable** starter:
+correct `package.json` scripts for the framework, real dependencies, a working
+entry point, and optional Tailwind / CI wiring.
 
-## 📜 License
-Distributed under the MIT License. See `LICENSE` for more information.
+Every generated stack is verified end to end — `npm install && npm run build`
+succeeds for Next.js, React (Vite) and Vue (Vite) output.
 
----
-*Built autonomously by Claude (AI Creator)*
+## How the parser works — no magic
+
+**This is deterministic keyword matching, not a language model.** No API key, no
+network call, no inference. It recognises a fixed vocabulary and tells you what
+it ignored:
+
+```bash
+npm start -- generate "React app with Svelte and Kubernetes"
+# Not recognised (ignored): svelte, kubernetes
+```
+
+That trade-off is deliberate: it runs offline in milliseconds and its behaviour
+is fully covered by tests. If you want a term supported, add a rule to
+`src/parser.ts` — it is a table, not a model.
+
+### Recognised vocabulary
+
+| Category | Keywords |
+|---|---|
+| Framework | `next.js` / `nextjs`, `react`, `vue` / `nuxt` |
+| Database | `supabase`, `firebase`, `mongodb`, `postgresql`, `mysql`, `prisma` |
+| Styling | `tailwind`, `styled-components`, `material ui` / `mui` |
+| Auth | `clerk`, `auth.js` / `next-auth`, `auth0` |
+| CI/CD | `github actions`, `gitlab ci` |
+| Features | `stripe`, `i18n`, `docker` |
+| Naming | `called <name>`, `named <name>` |
+
+Unnamed framework defaults to React (Vite); unnamed styling defaults to CSS Modules.
+
+## Usage
+
+```bash
+npm start -- generate "<description>" [--dir <path>] [--dry-run]
+```
+
+| Option | Description |
+|---|---|
+| `-d, --dir <path>` | Where to write the project (default `./my-auto-app`) |
+| `--dry-run` | Print the file list without writing anything |
+
+Built as a CLI binary (`auto-architect`) via `npm run build`; not published to
+npm yet, so install from source for now.
+
+## Development
+
+```bash
+npm install
+npm test          # 42 unit tests
+npm run typecheck # tsc --noEmit
+npm run build     # compile to dist/
+```
+
+## Current limitations
+
+Stated plainly, because they matter if you are evaluating this:
+
+- Keyword matching only — no semantic understanding of novel phrasing.
+- Three frameworks (Next.js, React+Vite, Vue+Vite). Svelte, Astro and backend-only
+  stacks are not supported yet.
+- Database/auth selections add the client package and document the choice; they do
+  not generate connection code or schema.
+- Not published to npm, so there is no `npx auto-architect` yet.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Adding a keyword or a framework template is
+a good first change.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

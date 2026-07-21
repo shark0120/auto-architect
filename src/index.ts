@@ -8,24 +8,40 @@ const program = new Command();
 
 program
   .name('auto-architect')
-  .description('AI-powered CLI to scaffold complete full-stack architectures')
+  .description('Scaffold a runnable project skeleton from a plain-English stack description')
   .version('1.0.0');
 
 program
   .command('generate')
   .alias('g')
-  .description('Generate a new project from a natural language prompt')
-  .argument('<prompt>', 'Describe the architecture you want')
+  .description('Generate a new project from a stack description')
+  .argument('<prompt>', 'Describe the stack you want, e.g. "Next.js with Supabase and Tailwind"')
   .option('-d, --dir <directory>', 'Target directory', './my-auto-app')
-  .action(async (prompt, options) => {
-    console.log(chalk.blue(`\n🚀 Generating architecture for:`));
-    console.log(chalk.italic(`"${prompt}"\n`));
-    
+  .option('--dry-run', 'Print the files that would be created without writing them', false)
+  .action((prompt: string, options: { dir: string; dryRun: boolean }) => {
+    const schema = parsePromptToSchema(prompt);
+
+    console.log(chalk.bold('\nResolved stack'));
+    console.log(`  Framework : ${schema.framework}`);
+    console.log(`  Styling   : ${schema.styling}`);
+    console.log(`  Database  : ${schema.database ?? 'None'}`);
+    console.log(`  Auth      : ${schema.auth ?? 'None'}`);
+    console.log(`  CI/CD     : ${schema.ci ?? 'None'}`);
+    console.log(`  Features  : ${schema.features.length > 0 ? schema.features.join(', ') : 'None'}`);
+
+    if (schema.unrecognized.length > 0) {
+      console.log(
+        chalk.yellow(`\nNot recognised (ignored): ${schema.unrecognized.join(', ')}`),
+      );
+      console.log(chalk.dim('  Auto-Architect matches a fixed keyword list; see the README.'));
+    }
+
     try {
-      const schema = await parsePromptToSchema(prompt);
-      await scaffoldProject(schema, options.dir);
-    } catch (err) {
-      console.error(chalk.red('Failed to generate architecture.'), err);
+      scaffoldProject(schema, options.dir, { dryRun: options.dryRun });
+    } catch (error) {
+      console.error(chalk.red('\nFailed to generate project.'));
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
     }
   });
 

@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['18.x', '20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test the compiled CLI
+        run: node dist/index.js generate "React app with Tailwind" --dir "$RUNNER_TEMP/smoke"
+
+  generated-output-builds:
+    # The core promise of this tool: what it generates must actually build.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: nextjs
+            prompt: 'Next.js app with Tailwind'
+          - name: react
+            prompt: 'React app with Tailwind'
+          - name: vue
+            prompt: 'Vue app with Tailwind'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Generate ${{ matrix.name }} project
+        run: node dist/index.js generate "${{ matrix.prompt }}" --dir "$RUNNER_TEMP/${{ matrix.name }}"
+
+      - name: Install and build the generated project
+        working-directory: ${{ runner.temp }}/${{ matrix.name }}
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
